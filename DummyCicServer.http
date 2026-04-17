@@ -1,6 +1,153 @@
-@DummyCicServer_HostAddress = http://localhost:5143
+@host = http://localhost:5143
+@token = dummy-test-token
 
-GET {{DummyCicServer_HostAddress}}/weatherforecast/
+### Health check (no auth required)
+GET {{host}}/health
 Accept: application/json
 
-###
+### Discovery - list all discoverable event aliases
+GET {{host}}/api/cfs-events/v1/discovery
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Schema Lookup - publication schema for trigger-imr-automate
+GET {{host}}/api/cfs-events/v1/event-alias-schemas/trigger-imr-automate.v1-payload
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Schema Lookup - response schema (imr.completed)
+GET {{host}}/api/cfs-events/v1/event-alias-schemas/imr.completed.v1-payload
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Schema Lookup - response schema (invoice.extracted)
+GET {{host}}/api/cfs-events/v1/event-alias-schemas/invoice.extracted.v1-payload
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Publish - Request/Reply (trigger-imr-automate, requires recipient)
+POST {{host}}/api/cfs-events/v1/publish
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "eventAlias": "trigger-imr-automate.v1",
+    "interactionType": "requestReply",
+    "recipient": "my-automate-imr-process-named-0",
+    "requestId": "req-001",
+    "eventInteractionModel": {
+        "eimId": "eim-imr-001"
+    },
+    "payload": {
+        "documentId": "12345",
+        "PO_Number": "PO-2026-001",
+        "Vendor_Name": "Contoso Ltd."
+    }
+}
+
+### Publish - Fire-and-Forget (trigger-some-automate)
+POST {{host}}/api/cfs-events/v1/publish
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "eventAlias": "trigger-some-automate.v1",
+    "interactionType": "fireAndForget",
+    "payload": {
+        "patientType": "outpatient"
+    }
+}
+
+### Publish - Request/Reply (invoice-data-extraction, recipient optional)
+POST {{host}}/api/cfs-events/v1/publish
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "eventAlias": "invoice-data-extraction.v1",
+    "interactionType": "requestReply",
+    "requestId": "req-002",
+    "eventInteractionModel": {
+        "eimId": "eim-invoice-001"
+    },
+    "payload": {
+        "Invoice_Document": "99001",
+        "PO_Number": "PO-2026-042",
+        "Vendor_Name": "Fabrikam Inc."
+    }
+}
+
+### Poll Responses - replace {requestId} with actual requestId from publish
+# @name pollResponses
+GET {{host}}/api/cfs-events/v1/requests/req-001/responses
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Poll Responses with afterSequence filter
+GET {{host}}/api/cfs-events/v1/requests/req-001/responses?afterSequence=1
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Error case - missing auth header
+GET {{host}}/api/cfs-events/v1/discovery
+Accept: application/json
+
+### Error case - unknown event alias
+POST {{host}}/api/cfs-events/v1/publish
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "eventAlias": "nonexistent-alias",
+    "interactionType": "fireAndForget",
+    "payload": {}
+}
+
+### Schema Lookup - all-types-demo publication schema (exercises all 8 field types)
+GET {{host}}/api/cfs-events/v1/event-alias-schemas/all-types-demo.v1-payload
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Schema Lookup - all-types success response schema
+GET {{host}}/api/cfs-events/v1/event-alias-schemas/all-types.success.v1-payload
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Publish - Request/Reply (all-types-demo, exercises all 8 field types)
+POST {{host}}/api/cfs-events/v1/publish
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+    "eventAlias": "all-types-demo.v1",
+    "interactionType": "requestReply",
+    "requestId": "req-all-types-001",
+    "eventInteractionModel": {
+        "eimId": "eim-all-types-001"
+    },
+    "payload": {
+        "PatientName": "Jane Doe",
+        "DiagnosisCodes": ["ICD-10-A01", "ICD-10-B02"],
+        "Priority": "High",
+        "EncounterDate": "2026-04-17T14:30:00Z",
+        "IsUrgent": true,
+        "PageCount": 12,
+        "ConfidenceScore": 0.87,
+        "SourceDocument": "DOC-123456"
+    }
+}
+
+### Poll Responses for all-types-demo (call 3 times to see completion)
+GET {{host}}/api/cfs-events/v1/requests/req-all-types-001/responses
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Error case - unknown schema
+GET {{host}}/api/cfs-events/v1/event-alias-schemas/nonexistent-schema
+Accept: application/json
+Authorization: Bearer {{token}}
+
+### Error case - unknown request for polling
+GET {{host}}/api/cfs-events/v1/requests/nonexistent-request/responses
+Accept: application/json
+Authorization: Bearer {{token}}

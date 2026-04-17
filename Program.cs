@@ -24,115 +24,117 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
    .WithName("Health");
 
 // ═════════════════════════════════════════════════════════════════════
-// 1. EVENT DISCOVERY
-//    GET /event-discovery?eventType=cfs.custom.event.v1
+// 1. DISCOVERY
+//    GET /api/cfs-events/v1/discovery
 // ═════════════════════════════════════════════════════════════════════
-app.MapGet("/event-discovery", (
-    [FromQuery] string eventType,
+app.MapGet("/api/cfs-events/v1/discovery", (
+    [FromQuery] string? pageToken,
+    [FromQuery] int? pageSize,
     EventStore store,
     ILogger<Program> logger) =>
 {
-    logger.LogInformation("Event discovery requested for type '{EventType}'", eventType);
-    var response = store.Discover(eventType);
+    logger.LogInformation("Discovery requested (pageToken={PageToken})", pageToken);
+    var response = store.Discover();
+    // Single-page mock — always return all items with no nextPageToken
     return Results.Ok(response);
 })
-.WithName("EventDiscovery");
+.WithName("Discovery");
 
 // ═════════════════════════════════════════════════════════════════════
-// 2. FIRE EVENT  (Request/Reply  OR  Fire-and-Forget)
-//    POST /api/system-integrations/events
+// 2. SCHEMA LOOKUP
+//    GET /api/cfs-events/v1/event-alias-schemas/{eventAliasSchemaId}
 // ═════════════════════════════════════════════════════════════════════
-app.MapPost("/api/system-integrations/events", (
-    HttpContext http,
-    [FromBody] FireEventRequest request,
+app.MapGet("/api/cfs-events/v1/event-alias-schemas/{eventAliasSchemaId}", (
+    string eventAliasSchemaId,
+    [FromQuery] string? eventAliasSchemaVersion,
     EventStore store,
     ILogger<Program> logger) =>
 {
-    var correlationId = http.Request.Headers["X-correlation-id"].FirstOrDefault();
-    var ttlHeader = http.Request.Headers["X-Event-TTL"].FirstOrDefault();
-    int? ttlSeconds = int.TryParse(ttlHeader, out var ttl) ? ttl : null;
+    logger.LogInformation("Schema lookup for '{SchemaId}'", eventAliasSchemaId);
+    var schema = store.LookupSchema(eventAliasSchemaId);
+    if (schema is null)
+    {
+        logger.LogWarning("Schema '{SchemaId}' not found", eventAliasSchemaId);
+        return Results.NotFound(new ErrorResponse
+        {
+            Error = new ErrorDetail
+            {
+                Code = "SCHEMA_NOT_FOUND",
+                Message = $"No event alias schema was found for '{eventAliasSchemaId}'."
+            }
+        });
+    }
 
-    var alias = store.FindAlias(request.EventType);
+    return Results.Ok(schema);
+})
+.WithName("SchemaLookup");
+
+// ═════════════════════════════════════════════════════════════════════
+// 3. PUBLISH
+//    POST /api/cfs-events/v1/publish
+// ═════════════════════════════════════════════════════════════════════
+app.MapPost("/api/cfs-events/v1/publish", (
+    [FromBody] PublishRequest request,
+    EventStore store,
+    ILogger<Program> logger) =>
+{
+    var alias = store.FindAlias(request.EventAlias);
     if (alias is null)
     {
-        logger.LogWarning("Unknown event alias '{AliasId}'", request.EventType);
-        return Results.NotFound(new { error = $"Event alias '{request.EventType}' not found" });
+        logger.LogWarning("Unknown event alias '{EventAlias}'", request.EventAlias);
+        return Results.UnprocessableEntity(new ErrorResponse
+        {
+            Error = new ErrorDetail
+            {
+                Code = "UNKNOWN_EVENT_ALIAS",
+                Message = $"Event alias '{request.EventAlias}' not found."
+            }
+        });
     }
 
     logger.LogInformation(
-        "Firing event '{AliasName}' (pattern={Pattern})",
-        alias.AliasName, alias.Pattern.Pattern);
+        "Publishing event '{EventAlias}' (interactionType={Type})",
+        request.EventAlias, request.InteractionType);
 
-    var jobId = store.CreateJob(request.EventType, correlationId, request.Payload, ttlSeconds);
-
-    // Fire-and-Forget → 202 Accepted, no jobId
-    if (alias.Pattern.Pattern.Equals("fireAndForget", StringComparison.OrdinalIgnoreCase))
-    {
-        logger.LogInformation("Fire-and-forget event accepted");
-        return Results.Json(
-            new FireAndForgetResponse
-            {
-                Status = "accepted",
-                IntegrationId = "integrationA",
-                CorrelationId = correlationId
-            },
-            statusCode: 202);
-    }
-
-    // Request/Reply → 200 OK with jobId for polling
-    var expiresAt = DateTimeOffset.UtcNow.AddSeconds(ttlSeconds ?? 600);
-    logger.LogInformation("Request/reply event accepted, jobId={JobId}", jobId);
-    return Results.Ok(new RequestReplyResponse
-    {
-        Status = "accepted",
-        JobId = jobId,
-        IntegrationId = "integrationA",
-        TtlSeconds = ttlSeconds ?? 600,
-        ExpiresAt = expiresAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-        CorrelationId = correlationId
-    });
+    var response = store.Publish(request);
+    return Results.Json(response, statusCode: 202);
 })
-.WithName("FireEvent");
+.WithName("Publish");
 
 // ═════════════════════════════════════════════════════════════════════
-// 3. POLL FOR EVENT COMPLETION  (Request/Reply only)
-//    POST /api/system-integrations/jobs/{jobId}
+// 4. POLL RESPONSES
+//    GET /api/cfs-events/v1/requests/{requestId}/responses
 // ═════════════════════════════════════════════════════════════════════
-app.MapPost("/api/system-integrations/jobs/{jobId}", (
-    string jobId,
-    HttpContext http,
+app.MapGet("/api/cfs-events/v1/requests/{requestId}/responses", (
+    string requestId,
+    [FromQuery] int? afterSequence,
+    [FromQuery] int? limit,
     EventStore store,
     ILogger<Program> logger) =>
 {
-    logger.LogInformation("Polling job '{JobId}'", jobId);
-    var result = store.PollJob(jobId);
+    logger.LogInformation("Polling responses for requestId='{RequestId}' (afterSequence={After})",
+        requestId, afterSequence);
+
+    var result = store.Poll(requestId, afterSequence ?? 0);
     if (result is null)
     {
-        logger.LogWarning("Job '{JobId}' not found", jobId);
-        return Results.NotFound(new { error = $"Job '{jobId}' not found" });
+        logger.LogWarning("Request '{RequestId}' not found", requestId);
+        return Results.NotFound(new ErrorResponse
+        {
+            Error = new ErrorDetail
+            {
+                Code = "REQUEST_NOT_FOUND",
+                Message = $"No request lifecycle was found for '{requestId}'.",
+                RequestId = requestId
+            }
+        });
     }
 
-    logger.LogInformation("Job '{JobId}' status: {Status} (poll #{PollCount})",
-        jobId, result.Status, result.Status == "Completed" ? "final" : "pending");
+    logger.LogInformation("Request '{RequestId}' state={State}, lastSequence={Seq}",
+        requestId, result.State, result.LastSequence);
 
     return Results.Ok(result);
 })
-.WithName("PollJob");
-
-// ═════════════════════════════════════════════════════════════════════
-// 4. DELETE JOB  (cleanup after request/reply completes or times out)
-//    DELETE /api/system-integrations/jobs/{jobId}
-// ═════════════════════════════════════════════════════════════════════
-app.MapDelete("/api/system-integrations/jobs/{jobId}", (
-    string jobId,
-    EventStore store,
-    ILogger<Program> logger) =>
-{
-    logger.LogInformation("Deleting job '{JobId}'", jobId);
-    return store.DeleteJob(jobId)
-        ? Results.NoContent()
-        : Results.NotFound(new { error = $"Job '{jobId}' not found" });
-})
-.WithName("DeleteJob");
+.WithName("PollResponses");
 
 app.Run();

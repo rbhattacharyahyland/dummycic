@@ -1,25 +1,31 @@
 namespace DummyCicServer.Models;
 
-public sealed class FireEventRequest
+// ── Publish Request ──────────────────────────────────────────────────
+
+public sealed class PublishRequest
 {
-    public string EventType { get; set; } = string.Empty;
+    public string EventAlias { get; set; } = string.Empty;
+    public string InteractionType { get; set; } = "fireAndForget";
     public string? Recipient { get; set; }
+    public string? RequestId { get; set; }
+    public PublishRequestEim? EventInteractionModel { get; set; }
     public Dictionary<string, object> Payload { get; set; } = new();
 }
 
-public sealed class RequestReplyResponse
+public sealed class PublishRequestEim
 {
-    public string Status { get; set; } = "accepted";
-    public string JobId { get; set; } = string.Empty;
-    public string IntegrationId { get; set; } = "integrationA";
-    public int TtlSeconds { get; set; } = 600;
-    public string ExpiresAt { get; set; } = string.Empty;
-    public string? CorrelationId { get; set; }
+    public string EimId { get; set; } = string.Empty;
 }
 
-public sealed class FireAndForgetResponse
+// ── Publish Response ─────────────────────────────────────────────────
+
+public sealed class PublishResponse
 {
-    public string Status { get; set; } = "accepted";
-    public string IntegrationId { get; set; } = "integrationA";
-    public string? CorrelationId { get; set; }
+    public string PublicationId { get; set; } = string.Empty;
+    public string AcceptedAt { get; set; } = string.Empty;
+    public string EventAlias { get; set; } = string.Empty;
+    public string InteractionType { get; set; } = string.Empty;
+    public string? RequestId { get; set; }
+    public string? RequestState { get; set; }
+    public string? ResponsePollPath { get; set; }
 }
